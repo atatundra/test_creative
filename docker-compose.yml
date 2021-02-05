@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+
+  data_base:
+    build: data_base/
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: 6609049
+      POSTGRES_USER: creative
+      POSTGRES_DB: currency
+    
+  
+  app:
+    build: app/
+    restart: always
+    command: node /opt/test_creative/index.js
+    environment: 
+      POSTGRES_USER: 'creative'
+      POSTGRES_PASSWORD: 6609049
+      API_KEY: 'secret_key'
+      CURRENCYFREAKS_API_KEY: '53eb2b0e3e7344a1aa4bad8b1891e650'
+    ports:
+      - 3000:3000
+    depends_on: 
+      [data_base]
+    
+
+
+  

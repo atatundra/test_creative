@@ -9,7 +9,8 @@
     "express-validator": "^6.9.2",
     "passport": "^0.4.1",
     "passport-headerapikey": "^1.2.2",
-    "pg": "^8.5.1"
+    "pg": "^8.5.1",
+    "sequelize": "^6.5.0"
   },
   "devDependencies": {},
   "scripts": {

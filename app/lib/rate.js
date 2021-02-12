@@ -1,155 +1,153 @@
 const https = require('https')
-const { Client } = require('pg')
-let currency_api = process.env.CURRENCYFREAKS_API_KEY
-let url = `https://api.currencyfreaks.com/latest?apikey=${currency_api}&symbols=USD,EUR,JPY,RUB`
+const { Sequelize, Model, DataTypes } = require('sequelize')
 
-const client = new Client({
-    user: process.env.POSTGRES_USER,
+const sequelize = new Sequelize("currency", process.env.POSTGRES_USER, process.env.POSTGRES_PASSWORD, {
+    dialect: 'postgres',
     host: 'data_base',
-    database: 'currency',
-    password: process.env.POSTGRES_PASSWORD
+    port: '5432'
 })
 
-client.connect()
-
-
-let currency_request = function (url) {
-    return new Promise((resolve, reject) => {
-        https.get(url, (res) =>{
-            let data = ''
-            res.on('data',  chunk => data += chunk )
-            res.on('end',   () => resolve(data))
-            res.on('error', e => reject(e))
-        })
-    })
-}
-
-let today_full_date = function () {
+let today_full_date = function() {
     let today  = new Date(Date.now())
     return `${today.getDate() <10 ? 0 : ''}${today.getDate()}-${today.getMonth()+1 <10 ? 0 : ''}${today.getMonth()+1}-${today.getFullYear()}`
 
 }
 
-let push = () => {
-    currency_request(url)
-    .then((res) => {
-        res=JSON.parse(res)
-        client.query({    text: 'INSERT INTO day_course(date, eur, jpy, rub) VALUES($1, $2, $3, $4)',
-                      values: [today_full_date(), res.rates.EUR, res.rates.JPY, res.rates.RUB]
-                 }, (err,res)=>console.log(res))
-    })
-    
-}
-
-let check = () => {                                                                             //проверка записи на текущую дату
-    client.query(`SELECT * FROM day_course WHERE date='${today_full_date()}'`)
-        .then( res => {
-            if(res.rowCount==0) push()
-        })
-}
-
-let timer = () => {                                                                             //обновление и запись в БД курса валют в назначенное время
-    let today  = new Date(Date.now())
-    let clock = 12
-    let timeout = ((1000*3600*24)-(today.getMilliseconds()+((today.getSeconds()*1000)+(today.getMinutes()*60*1000)+(today.getHours()*3600*1000))))-((1000*3600*24)-(1000*3600*clock))
-    if(Math.sign(timeout)==-1) timeout = (1000*3600*24)+timeout
-    let interval = 1000*3600*24
-
-    let update_query = () => {
-        currency_request(url)
-        .then((res) => {
-            res=JSON.parse(res)
-            client.query({    text: 'UPDATE day_course SET eur=$2, jpy=$3, rub=$4 WHERE date = $1',
-                            values: [today_full_date(), res.rates.EUR, res.rates.JPY, res.rates.RUB]
-                        }, (err,res)=>{ console.log('updated') })
-        })
-    }
-    
-    setInterval(check, 1000*3600);
-
-    let update = function () {
-        update_query()
-        setInterval(update_query,interval)
+class Day_course extends Model {}
+Day_course.init({
+    date: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    usd: {
+        type: DataTypes.REAL
+    },
+    eur: {
+        type: DataTypes.REAL,
+        allowNull: false
+    },
+    jpy: {
+        type: DataTypes.REAL,
+        allowNull: false
+    },
+    rub: {
+        type: DataTypes.REAL,
+        allowNull: false
     }
 
-    setTimeout(update, timeout);
 
+}, { sequelize, modelName: 'day_course' })
+
+class Log extends Model {}
+Log.init({
+    date: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    type: {
+        type: DataTypes.STRING,
+        allowNull: false
+    }
+},{ sequelize, modelName: 'log' })
+
+
+
+
+
+class DB extends Day_course {
     
-}
+    currency_api = process.env.CURRENCYFREAKS_API_KEY;
+    url = `https://api.currencyfreaks.com/latest?apikey=${this.currency_api}&symbols=USD,EUR,JPY,RUB`;
 
-let fist_write = () => {
-        
-    let five_day_earler = new Date(Date.now() - 1000*3600*24*5)
-    let last_five_day_url = `https://api.currencyfreaks.com/timeseries?apikey=${currency_api}&start_date=${five_day_earler.getFullYear()}-${five_day_earler.getMonth()+1 < 10 ? 0 : ''}${five_day_earler.getMonth()+1}-${five_day_earler.getDate()}&end_date=${today.getFullYear()}-${today.getMonth()+1 < 10 ? 0 : ''}${today.getMonth()+1}-${today.getDate()}&base=USD&symbols=EUR,JPY,RUB`
-    
-    currency_request(last_five_day_url)
-    .then((res)=>{
-        if(res.success){
-            for (const day of res.rates) {
-                client.query({
-                    text: 'INSERT INTO currency(date, eur, jpy, rub) VALUES($1, $2, $3, $4)',
-                    values: [day.slice(0,10), res.rates[day].EUR, res.rates[day].JPY, res.rates[day].RUB]
-                }, (err,res)=>console.log(res))
-            } 
-        }else{
-            console.log(res.error.message);
-        } 
-    })
-    .catch((e)=>console.log(e))
-}
-
-let rate = {
-
-    get_all(course_date){
-        return new Promise((resolve,reject)=>{
-            client.query(`SELECT * FROM day_course WHERE date ='${course_date}'`, (err,res) => {
-                resolve(res.rows)
+    static currency_request() {
+        return new Promise((resolve, reject) => {
+            https.get(url, (res) =>{
+                let data = ''
+                res.on('data',  chunk => data += chunk )
+                res.on('end',   () => {
+                    const parseData = JSON.parse(data)
+                    resolve(parseData)
+                })
+                res.on('error', e => reject(e))
             })
         })
-    },
+    }
 
-    get_pair(req){
-        return new Promise((resolve,reject)=>{
-           
-            client.query(`SELECT ${req.currency1},${req.currency2} FROM day_course WHERE date ='${today_full_date()}'`, (err,res) => {
-                for (const [key, val] of Object.entries(res.rows[0])) {
-                    if (val==null && key=='usd') res.rows[0].usd=1
+    static push() {
+        this.currency_request(this.url)
+        .then((res) => Day_course.create({ date: today_full_date(), eur: res.rates.EUR, jpy: res.rates.JPY, rub: res.rates.RUB }) )
+    }
+
+    static async check_today() {
+        
+        let result = await Day_course.findOne({ where: { date:today_full_date()}})                //проверка записи на текущую дату
+        if(result === null) this.push()  
+    }
+
+    static timer() {                                                                             //обновление и запись в БД курса валют в назначенное время
+        let today  = new Date(Date.now())
+        let clock = 12
+        let timeout = ((1000*3600*24)-(today.getMilliseconds()+((today.getSeconds()*1000)+(today.getMinutes()*60*1000)+(today.getHours()*3600*1000))))-((1000*3600*24)-(1000*3600*clock))
+        if(Math.sign(timeout)==-1) timeout = (1000*3600*24)+timeout
+        let interval = 1000*3600*24
+        let update_query = () => {
+            currency_request(url)
+            .then((res) => Day_course.update({ eur: res.rates.EUR, jpy: res.rates.JPY, rub: res.rates.RUB }, {
+                where: {
+                    date: today_full_date()
                 }
-                let currencys = Object.values(res.rows[0])
-                resolve(currencys[0]/currencys[1])
-            })
-        })
-    },
-
-    log(type){
-        client.query({    text: 'INSERT INTO log(date, type) VALUES($1, $2)',
-                      values: [today_full_date(), type]
-                 }, (err,res)=>{ if(err) console.log(err) })
-    },
-
-    init(){
-            
-        client.query(`CREATE TABLE IF NOT EXISTS day_course (
-            date TEXT primary key,
-            usd real,
-            eur real,
-            jpy real,
-            rub real)`)
-        
-        client.query(`CREATE TABLE IF NOT EXISTS log (
-            date TEXT ,
-            type TEXT )`)
-        
-        // client.query(`SELECT * FROM day_course`, (err,res)=>{
-        //     if(res.rowCount == 0) fist_write()
-        // })
-
-        check()                                                             
-            
+            }))
+        }
+        setInterval(this.check_today, 1000*3600);
+        let update = function () {
+            update_query()
+            setInterval(update_query,interval)
+        }
+        setTimeout(update, timeout);   
+    }
     
-        timer()                                                             
+    static get_pair(req) {
+        return new Promise(async (resolve,reject)=>{
+           const result = await Day_course.findOne({
+               where: {
+                   date: today_full_date()
+               }
+           })
+           result[0].usd = 1
+           resolve(result[0][req.currency1]/result[0][req.currency2])
+        })
+    }
+
+    static fist_write() {
+        let five_day_earler = new Date(Date.now() - 1000*3600*24*5)
+        let last_five_day_url = `https://api.currencyfreaks.com/timeseries?apikey=${currency_api}&start_date=${five_day_earler.getFullYear()}-${five_day_earler.getMonth()+1 < 10 ? 0 : ''}${five_day_earler.getMonth()+1}-${five_day_earler.getDate()}&end_date=${today.getFullYear()}-${today.getMonth()+1 < 10 ? 0 : ''}${today.getMonth()+1}-${today.getDate()}&base=USD&symbols=EUR,JPY,RUB`
+        currency_request(last_five_day_url)
+        .then((res)=>{
+            if(res.success){
+                for (const day of res.rates) {
+                    Day_course.create({ date: day.slice(0,10), eur: res.rates[day].EUR, jpy: res.rates[day].JPY, rub: res.rates[day].RUB})
+                } 
+            }else{
+                console.log(res.error.message);
+            } 
+        })
+        .catch((e)=>console.log(e))
+    }
+
+    static start() {
+        sequelize.sync()
+        .then(console.log)
+        .catch(console.log)
+        // const check_first = await Day_course.findAll()
+        // if(check_first === null) this.fist_write()
+        this.check_today()
+        this.timer()                                                             
+    }
+
+    static log(type){
+        Log.create({ date: today_full_date(), type: type })
     }
 }
 
 
-module.exports.rate = rate
+module.exports.DB = DB
